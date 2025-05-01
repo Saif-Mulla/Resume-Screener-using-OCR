@@ -1,55 +1,46 @@
+# --- Enhanced Entity Extraction (ML + Rules Hybrid) ---
+
 import re
-from flair.data import Sentence
-from flair.models import SequenceTagger
+import spacy
+from typing import Dict
 
-def extract_email_and_phone(text):
-    # Fix broken @ and . that OCR commonly splits
-    text = text.replace(" @ ", "@").replace(" . ", ".").replace(" dot ", ".")
-    text = text.replace(" at ", "@").replace("(at)", "@").replace(" ", "")
+# Load spaCy's English NER model (smaller model for speed, can upgrade to 'en_core_web_trf' for best results)
+nlp = spacy.load("en_core_web_sm")
 
-    # Email regex (simple + tolerant)
-    email_matches = re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
-    email = email_matches[0] if email_matches else ""
+# Regular expressions for emails and phone numbers
+EMAIL_REGEX = r"[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,6}"
+PHONE_REGEX = r"(?:\+?\d{1,3}[\s-]?)?(?:\(\d{2,4}\)[\s-]?)?\d{3,4}[\s-]?\d{3,4}(?:[\s-]?\d{3,4})?"
 
-    # Phone regex (with OCR context tolerance)
-    phone_matches = re.findall(r"[\+(\d]{0,4}[\d\s\-().]{9,}", text)
-    phone = ""
 
-    # Filter only digit-rich results with length ~10-15
-    for match in phone_matches:
-        digits = re.sub(r"\D", "", match)
-        if 10 <= len(digits) <= 15:
-            phone = digits
-            break
+def extract_entities_from_text(text: str) -> Dict[str, str]:
+    """
+    Extracts Name, Email, and Phone from a text block.
+    Hybrid Approach: ML (SpaCy NER) + Rule-Based (Regex)
+    """
+    extracted_data = {"name": "", "email": "", "phone": ""}
 
-    return email, phone
+    # 1. Extract Email
+    email_match = re.search(EMAIL_REGEX, text)
+    if email_match:
+        extracted_data["email"] = email_match.group()
 
-# Load the NER model (once globally)
-flair_ner_tagger = SequenceTagger.load("ner")
+    # 2. Extract Phone
+    phone_match = re.search(PHONE_REGEX, text)
+    if phone_match:
+        phone_number = re.sub(r"[^\d]", "", phone_match.group())  # Keep only digits
+        if 8 <= len(phone_number) <= 15:
+            extracted_data["phone"] = phone_number
 
-def extract_name_using_flair(text):
-    # Convert text into Flair sentence
-    sentence = Sentence(text)
+    # 3. Extract Name
+    # Process text with SpaCy
+    doc = nlp(text)
+    candidate_names = [ent.text.strip() for ent in doc.ents if ent.label_ == "PERSON"]
+    if candidate_names:
+        # Pick the first reasonably looking name
+        selected_name = candidate_names[0]
+        # Avoid cases where email or random words are picked as name
+        if len(selected_name.split()) <= 5 and not any(char.isdigit() for char in selected_name):
+            extracted_data["name"] = selected_name
 
-    try:
-        # Predict named entities
-        flair_ner_tagger.predict(sentence)
+    return extracted_data
 
-        # Loop through entities and return first PERSON entity
-        for entity in sentence.get_spans('ner'):
-            if entity.get_label("ner").value == "PER":
-                return entity.text.strip()
-    except Exception as e:
-        print("❌ Flair NER error:", e)
-
-    return ""
-
-def extract_entities(text):
-    name = extract_name_using_flair(text)  # You’ll use Flair here
-    email, phone = extract_email_and_phone(text)
-    
-    return {
-        "name": name,
-        "email": email,
-        "phone": phone
-    }

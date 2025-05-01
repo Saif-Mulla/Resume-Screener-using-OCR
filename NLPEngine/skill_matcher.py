@@ -1,23 +1,24 @@
+# skill_matcher.py
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from nltk.corpus import wordnet
+import numpy as np
+
+def expand_synonyms(skill_list):
+    expanded = set(skill_list)
+    for word in skill_list:
+        for syn in wordnet.synsets(word):
+            for lemma in syn.lemmas():
+                expanded.add(lemma.name())
+    return list(expanded)
 
 def match_resume_with_jd(resume_text, jd_text):
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
-
-    vectors = vectorizer.fit_transform([resume_text, jd_text])
-
-    # Cosine similarity
-    score = cosine_similarity(vectors[0:1], vectors[1:2])[0][0]
-
-    # Feature terms used
-    feature_names = vectorizer.get_feature_names_out()
+    skills = jd_text.split()
+    expanded_skills = expand_synonyms(skills)
     
-    # Intersect words from JD and resume
-    resume_words = set(resume_text.lower().split())
-    jd_words = set(jd_text.lower().split())
-    common_words = resume_words.intersection(jd_words)
-
-    # Vocabulary overlap with JD
-    matched_keywords = [term for term in feature_names if term in common_words]
-
-    return round(score, 2), matched_keywords, list(feature_names)
+    documents = [resume_text, " ".join(expanded_skills)]
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(documents)
+    
+    similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
+    return similarity[0][0]

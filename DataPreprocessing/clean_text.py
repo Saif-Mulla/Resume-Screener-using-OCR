@@ -1,25 +1,16 @@
+# clean_text.py
 import re
 import spacy
 
-def clean_extracted_text(text):
-    # ✅ Minimal cleanup — preserve word tokens
-    text = text.replace('\n', ' ').replace('\r', ' ')
-
-    # ⚠️ Don't remove punctuation critical for email or names
-    text = re.sub(r'[^\x00-\x7F]+', ' ', text)   # Remove non-ASCII
-    text = re.sub(r'\s+', ' ', text)             # Normalize whitespace
-    return text.strip()
-
-
 nlp = spacy.load("en_core_web_sm")
 
-def preprocess_text(text):
-    text = re.sub(r"[^a-zA-Z\s]", " ", text)       # ✅ Clean out special characters and numbers
-    text = re.sub(r"\s+", " ", text)               # ✅ Normalize spaces
+def clean_extracted_text(text):
+    text = re.sub(r'\n+', ' ', text)    # Remove newlines
+    text = re.sub(r'\s+', ' ', text)     # Normalize spaces
+    text = re.sub(r'[^\w\s@.-]', '', text) # Remove special chars except email related
+    return text.strip()
 
-    doc = nlp(text.lower())                        # ✅ SpaCy parses text into tokens
-    lemmatized = " ".join([
-        token.lemma_ for token in doc
-        if not token.is_stop and token.is_alpha     # ✅ Removes stopwords & non-words
-    ])
-    return lemmatized
+def preprocess_text(text):
+    doc = nlp(text.lower())
+    tokens = [token.lemma_ for token in doc if not token.is_stop and not token.is_punct]
+    return " ".join(tokens)
