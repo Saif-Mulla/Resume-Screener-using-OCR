@@ -22,3 +22,17 @@ def match_resume_with_jd(resume_text, jd_text):
     
     similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
     return similarity[0][0]
+
+def prefilter_resumes(resume_texts, required_keywords):
+    """
+    Keep only resumes that mention ALL required keywords at least once.
+    """
+    filtered_resumes = []
+    filenames = []
+    for idx, text in enumerate(resume_texts):
+        if all(keyword.lower() in text.lower() for keyword in required_keywords):
+            filtered_resumes.append(text)
+            filenames.append(idx)  # Track which resume index passed
+    return filtered_resumes, filenames
+
+

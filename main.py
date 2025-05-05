@@ -5,9 +5,11 @@ import logging
 import json
 
 from DataPreprocessing.clean_text import clean_extracted_text, preprocess_text
-from OCREngine.tesseract_wrapper import perform_ocr, basic_spell_check
+from OCREngine.tesseract_wrapper import perform_ocr
 from NLPEngine.extract_entities import extract_entities_from_text
-from NLPEngine.global_tfidf import fit_global_tfidf, transform_with_global_tfidf
+from NLPEngine.global_tfidf import fit_global_tfidf, build_tfidf_with_control
+from NLPEngine.skill_matcher import prefilter_resumes
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Configuration
 resume_folder = "dataset/resumes"
@@ -50,10 +52,20 @@ Education
 BS in Computer Science, Information Systems or related discipline (or equivalent experience)
 """
 
+# Must-have keywords (for pre-filtering)
+required_keywords = ["SQL", "Python", "engineer", "database"]
+# JD important keywords (for TF-IDF matching)
+jd_keywords = [
+    "oracle", "sql-server", "postgresql", "aws", "azure", "etl", "pl/sql", "t-sql",
+    "python", "bash", "git", "ci/cd", "spark", "hadoop", "airflow", "docker", "mongodb", "redis"
+]
+
+
 def main():
 
     # Load and prepare all resumes first for global TF-IDF
     all_resume_texts = []
+    raw_resume_texts = []
     filenames = []
     for filename in os.listdir(resume_folder):
         if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
@@ -62,56 +74,54 @@ def main():
             cleaned_text = clean_extracted_text(raw_text)
             lemmatized_text = preprocess_text(cleaned_text)
             all_resume_texts.append(lemmatized_text)
+            raw_resume_texts.append(raw_text)
             filenames.append(filename)
             print(f"{filename} Appended successfully!")
 
-    # Fit global TF-IDF
-    fit_global_tfidf(all_resume_texts + [preprocess_text(jd_text)])
+     # Pre-filter resumes based on required keywords
+    filtered_resumes, filtered_indexes = prefilter_resumes(all_resume_texts, required_keywords)
 
+    tfidf_matrix, vectorizer = build_tfidf_with_control(preprocess_text(jd_text), filtered_resumes, jd_keywords)
+
+    jd_vector = tfidf_matrix[0]
+    resume_vectors = tfidf_matrix[1:]
+
+    jd_vector_array = jd_vector.toarray()
+    similarities = cosine_similarity(resume_vectors, jd_vector_array)
+
+    results = []
     # Now process each file individually
-    for idx, filename in enumerate(filenames):
-        file_path = os.path.join(resume_folder, filename)
+    for idx, similarity in enumerate(similarities):
+        original_index = filtered_indexes[idx]
+        filename = filenames[original_index]
         logging.info(f"Processing: {filename}")
+
+        raw_text = raw_resume_texts[original_index]
+
+        logging.info(f"Extracted Text:\n{raw_text}")
+        logging.info(f"Average OCR Confidence: {ocr_confidence:.2f}%")
+
+        entities = extract_entities_from_text(raw_text)
+        matched_keywords = [word for word in all_resume_texts[original_index].split() if word in jd_keywords]
         
-        try:
-            raw_text, ocr_confidence = perform_ocr(file_path)
-            clean_text = clean_extracted_text(raw_text)
+        logging.info("Extracted Entities:", entities)
 
-            logging.info(f"Extracted Text:\n{raw_text}")
-            logging.info(f"Average OCR Confidence: {ocr_confidence:.2f}%")
-            
-            if ocr_confidence < 0.40:
-                clean_text = basic_spell_check(clean_text)
+        result = {
+            "filename": filename,
+            "name": entities.get("name"),
+            "email": entities.get("email"),
+            "phone": entities.get("phone"),
+            "score": round(float(similarity[0]), 4),
+            "ocr_avg_confidence": round(float(ocr_confidence), 2),
+            "matched_keywords": matched_keywords[:10],
+            "tfidf_vocab_size": len(vectorizer.vocabulary_),
+        }
+        results.append(result)
 
-            lemmatized_text = preprocess_text(clean_text)
-            entities = extract_entities_from_text(raw_text)
-            logging.info("Extracted Entities:", entities)
-            resume_vec = transform_with_global_tfidf(lemmatized_text)
-            jd_vec = transform_with_global_tfidf(preprocess_text(jd_text))
+        with open(output_path, "a") as f:
+            f.write(json.dumps(result) + "\n")
 
-            from sklearn.metrics.pairwise import cosine_similarity
-            score = cosine_similarity(resume_vec, jd_vec)[0][0]
-
-            matched_keywords = [word for word in lemmatized_text.split() if word in preprocess_text(jd_text)]
-
-            result = {
-                "filename": filename,
-                "name": entities["name"],
-                "email": entities["email"],
-                "phone": entities["phone"],
-                "score": round(float(score), 4),
-                "ocr_avg_confidence": round(float(ocr_confidence), 2),
-                "matched_keywords": matched_keywords[:10],
-                "tfidf_vocab_size": len(resume_vec.toarray()[0])
-            }
-
-            with open(output_path, "a") as f:
-                f.write(json.dumps(result) + "\n")
-
-            logging.info("Result processed successfully.")
-
-        except Exception as e:
-            print(f"⚠️ Error processing {filename}: {e}")
+        logging.info("Result processed successfully.")
 
     print("✅ Screening complete! Results saved in results/ranked_resumes.json")
 
